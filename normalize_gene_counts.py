@@ -3,6 +3,22 @@ import argparse
 import pandas as pd
 from pathlib import Path
 
+# Map known annotation types to their key column
+ANNOTATION_TYPES = {
+    "GO": "goAcc",
+    "KEGG": "ecNum",
+    "InterPro": "iprId",
+    "KOG": "kogid",
+    "Signalp": "proteinid"
+}
+
+def detect_annotation_type(annotation_dir):
+    for file in os.listdir(annotation_dir):
+        for ann_type, key in ANNOTATION_TYPES.items():
+            if ann_type.lower() in file.lower():
+                return ann_type
+    raise ValueError("Could not detect annotation type from file names.")
+
 def is_empty_file(filepath):
     try:
         df = pd.read_csv(filepath, sep='\t')
@@ -13,7 +29,7 @@ def is_empty_file(filepath):
 def extract_portal_name(filename):
     parts = filename.split("_")
     for i, part in enumerate(parts):
-        if part in {"GeneCatalog", "filtered", "GO.tab.gz", "FilteredModels1"}:
+        if part in {"GeneCatalog", "filtered", "KEGG.tab", "FilteredModels1"}:
             return "_".join(parts[:i]) if i > 2 else parts[0]
     return parts[0]
 
@@ -30,18 +46,8 @@ def remove_duplicate_files(file_list):
 
     return keep_files
 
-def get_gene_name_col(annotation_type):
-    mapping = {
-        "GO": "goAcc",
-        "KEGG": "ecNum",
-        "InterPro": "iprId",
-        "KOG": "kogid",
-        "Signalp": "proteinid"
-    }
-    return mapping.get(annotation_type)
-
 def get_gene_id_table(filepath, annotation_type):
-    col = get_gene_name_col(annotation_type)
+    col = ANNOTATION_TYPES[annotation_type]
     try:
         skip = 1 if annotation_type == "Signalp" else 0
         df = pd.read_csv(filepath, sep='\t', skiprows=skip)
@@ -50,7 +56,7 @@ def get_gene_id_table(filepath, annotation_type):
         return pd.DataFrame(columns=[col])
 
 def get_gene_counts(filepath, gene_names, annotation_type):
-    col = get_gene_name_col(annotation_type)
+    col = ANNOTATION_TYPES[annotation_type]
     skip = 1 if annotation_type == "Signalp" else 0
     df = pd.read_csv(filepath, sep='\t', skiprows=skip)
     df["numHits"] = 1
@@ -74,14 +80,17 @@ def average_taxa(df, metadata, group_by):
     grouped = merged.groupby(group_by).mean().T
     return grouped
 
-def main(annotation_dir, metadata_path, output_dir, annotation_type):
+def main(annotation_dir, metadata_path, output_dir, annotation_type=None):
     os.makedirs(output_dir, exist_ok=True)
+    if not annotation_type:
+        annotation_type = detect_annotation_type(annotation_dir)
+
     all_files = list(Path(annotation_dir).glob("*.tab"))
     valid_files = [str(f) for f in all_files if not is_empty_file(f)]
     deduped_files = remove_duplicate_files(valid_files)
 
     # Gene list
-    gene_name_col = get_gene_name_col(annotation_type)
+    gene_name_col = ANNOTATION_TYPES[annotation_type]
     gene_lists = [get_gene_id_table(f, annotation_type) for f in deduped_files]
     all_gene_ids = pd.concat(gene_lists).drop_duplicates()
     all_gene_ids.columns = [gene_name_col]
@@ -114,6 +123,6 @@ if __name__ == "__main__":
     parser.add_argument("--annotation_dir", required=True)
     parser.add_argument("--metadata_path", required=True)
     parser.add_argument("--output_dir", required=True)
-    parser.add_argument("--annotation_type", required=True, choices=["GO", "KEGG", "InterPro", "KOG", "Signalp"])
+    parser.add_argument("--annotation_type", required=False, choices=ANNOTATION_TYPES.keys())
     args = parser.parse_args()
     main(args.annotation_dir, args.metadata_path, args.output_dir, args.annotation_type)
